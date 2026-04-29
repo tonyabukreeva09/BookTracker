@@ -1,136 +1,190 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-import random
-import string
 import json
 import os
+import re
+from datetime import datetime
 
 # --- Настройки ---
-HISTORY_FILE = "history.json"
-MIN_LENGTH = 4
-MAX_LENGTH = 32
+DATA_FILE = "data.json"
+DATE_FORMAT = "%d.%m.%Y" # Формат даты: ДД.ММ.ГГГГ
 
-# --- Функции работы с историей ---
-def load_history():
-    """Загружает историю из файла JSON при запуске."""
-    if os.path.exists(HISTORY_FILE):
+# --- Функции работы с данными ---
+def load_data():
+    """Загружает данные из файла JSON."""
+    if os.path.exists(DATA_FILE):
         try:
-            with open(HISTORY_FILE, 'r') as f:
+            with open(DATA_FILE, 'r') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
             return []
     return []
 
-def save_history():
-    """Сохраняет историю в файл JSON при выходе или добавлении нового пароля."""
-    with open(HISTORY_FILE, 'w') as f:
-        json.dump(history_data, f, indent=4)
+def save_data():
+    """Сохраняет данные в файл JSON."""
+    with open(DATA_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
 
-# --- Основная логика приложения ---
-def generate_password():
-    """Генерирует пароль на основе выбранных настроек."""
+# --- Функции валидации и логики ---
+def validate_input(date, temp, desc):
+    """Проверяет корректность введенных данных."""
+    # Проверка даты
     try:
-        length = int(length_var.get())
+        datetime.strptime(date, DATE_FORMAT)
     except ValueError:
-        messagebox.showerror("Ошибка", "Длина пароля должна быть целым числом.")
-        return
+        messagebox.showerror("Ошибка", f"Дата должна быть в формате ДД.ММ.ГГГГ (например, 29.04.2026)")
+        return False
 
-    # Проверка длины пароля
-    if length < MIN_LENGTH or length > MAX_LENGTH:
-        messagebox.showerror("Ошибка", f"Длина должна быть от {MIN_LENGTH} до {MAX_LENGTH} символов.")
-        return
+    # Проверка температуры
+    try:
+        float(temp)
+    except ValueError:
+        messagebox.showerror("Ошибка", "Температура должна быть числом.")
+        return False
 
-    # Проверка, что выбран хотя бы один тип символов
-    if not (lower_var.get() or upper_var.get() or digits_var.get() or symbols_var.get()):
-        messagebox.showwarning("Предупреждение", "Выберите хотя бы один тип символов.")
-        return
+    # Проверка описания
+    if not desc.strip():
+        messagebox.showerror("Ошибка", "Описание погоды не может быть пустым.")
+        return False
 
-    # Сбор набора символов для генерации
-    chars = ''
-    if lower_var.get(): chars += string.ascii_lowercase
-    if upper_var.get(): chars += string.ascii_uppercase
-    if digits_var.get(): chars += string.digits
-    if symbols_var.get(): chars += string.punctuation
+    return True
 
-    password = ''.join(random.choices(chars, k=length))
-    
-    # Отображение и сохранение
-    password_entry.delete(0, tk.END)
-    password_entry.insert(0, password)
-    
-    history_data.append(password)
-    update_history_table()
-    save_history()
+def add_record():
+    """Обрабатывает добавление новой записи."""
+    date = date_entry.get()
+    temp = temp_entry.get()
+    desc = desc_entry.get("1.0", tk.END).strip()
+    precip = precip_var.get() == "Да"
 
-def copy_to_clipboard():
-    """Копирует сгенерированный пароль в буфер обмена."""
-    password = password_entry.get()
-    if password:
-        root.clipboard_clear()
-        root.clipboard_append(password)
-        messagebox.showinfo("Успех", "Пароль скопирован в буфер обмена!")
+    if validate_input(date, temp, desc):
+        record = {
+            "date": date,
+            "temperature": float(temp),
+            "description": desc,
+            "precipitation": precip
+        }
+        data.append(record)
+        update_treeview()
+        save_data()
+        clear_inputs()
 
-def update_history_table():
-    """Обновляет виджет таблицы истории."""
+def clear_inputs():
+    """Очищает поля ввода после добавления записи."""
+    date_entry.delete(0, tk.END)
+    temp_entry.delete(0, tk.END)
+    desc_entry.delete("1.0", tk.END)
+    precip_var.set("Нет")
+
+def filter_records():
+    """Фильтрует записи в таблице на основе критериев пользователя."""
+    filtered_data = data.copy()
+
+    # Фильтр по дате
+    date_filter = filter_date_entry.get()
+    if date_filter:
+        try:
+            datetime.strptime(date_filter, DATE_FORMAT)
+            filtered_data = [r for r in filtered_data if r['date'] == date_filter]
+        except ValueError:
+            messagebox.showerror("Ошибка", "Дата для фильтра в неверном формате.")
+            return
+
+    # Фильтр по температуре
+    temp_filter = filter_temp_entry.get()
+    if temp_filter:
+        try:
+            temp_val = float(temp_filter)
+            # Показываем записи с температурой ВЫШЕ указанного значения
+            filtered_data = [r for r in filtered_data if r['temperature'] > temp_val]
+        except ValueError:
+            messagebox.showerror("Ошибка", "Температура для фильтра должна быть числом.")
+            return
+
+    update_treeview(filtered_data)
+
+def update_treeview(records=None):
+    """Обновляет виджет таблицы."""
     for i in tree.get_children():
         tree.delete(i)
-    for idx, pwd in enumerate(history_data):
-        tree.insert("", "end", values=(idx+1, pwd))
+    
+    # Если records не передан, показываем все данные
+    records_to_show = records if records is not None else data
+
+    for record in records_to_show:
+        precip_str = "Да" if record['precipitation'] else "Нет"
+        tree.insert("", "end", values=(
+            record['date'],
+            record['temperature'],
+            record['description'],
+            precip_str
+        ))
 
 # --- Инициализация данных ---
-history_data = load_history()
+data = load_data()
 
 # --- Создание окна ---
 root = tk.Tk()
-root.title("Random Password Generator")
-root.geometry("600x450")
-root.resizable(False, False)
+root.title("Weather Diary")
+root.geometry("800x500")
 
-# --- Элементы интерфейса ---
-# Длина пароля (Ползунок)
-length_label = ttk.Label(root, text="Длина пароля:")
-length_label.grid(row=0, column=0, padx=10, pady=10, sticky="e")
-length_var = tk.IntVar(value=12)
-length_slider = ttk.Scale(root, from_=MIN_LENGTH, to=MAX_LENGTH, variable=length_var, orient='horizontal', length=250)
-length_slider.grid(row=0, column=1, columnspan=2, padx=10, pady=10)
+# --- Основная рамка для ввода данных ---
+input_frame = ttk.LabelFrame(root, text="Добавить новую запись")
+input_frame.pack(padx=10, pady=10, fill="x")
 
-# Чекбоксы для выбора символов
-options_frame = ttk.LabelFrame(root, text="Состав пароля")
-options_frame.grid(row=1, column=0, columnspan=3, padx=10, pady=10, sticky="we")
+# Поля ввода (Дата, Температура)
+ttk.Label(input_frame, text="Дата (ДД.ММ.ГГГГ):").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+date_entry = ttk.Entry(input_frame, width=15)
+date_entry.grid(row=0, column=1, padx=5, pady=5)
 
-lower_var = tk.BooleanVar(value=True)
-upper_var = tk.BooleanVar(value=True)
-digits_var = tk.BooleanVar(value=True)
-symbols_var = tk.BooleanVar(value=False)
+ttk.Label(input_frame, text="Температура:").grid(row=0, column=2, padx=5, pady=5, sticky="e")
+temp_entry = ttk.Entry(input_frame, width=10)
+temp_entry.grid(row=0, column=3, padx=5, pady=5)
 
-ttk.Checkbutton(options_frame, text="A-Z (Большие)", variable=upper_var).grid(row=0, column=0, sticky="w")
-ttk.Checkbutton(options_frame, text="a-z (Маленькие)", variable=lower_var).grid(row=1, column=0, sticky="w")
-ttk.Checkbutton(options_frame, text="0-9 (Цифры)", variable=digits_var).grid(row=0, column=1, sticky="w")
-ttk.Checkbutton(options_frame, text="!@#$% (Символы)", variable=symbols_var).grid(row=1, column=1, sticky="w")
+ttk.Label(input_frame, text="Описание:").grid(row=1, column=0, padx=5, pady=5, sticky="ne")
+desc_entry = tk.Text(input_frame, height=3, width=30)
+desc_entry.grid(row=1, column=1, columnspan=3, padx=5, pady=5, sticky="we")
 
-# Кнопка генерации и поле вывода
-btn_frame = ttk.Frame(root)
-btn_frame.grid(row=2, column=0, columnspan=3, pady=10)
+ttk.Label(input_frame, text="Осадки:").grid(row=2, column=0, padx=5, pady=5, sticky="e")
+precip_var = tk.StringVar(value="Нет")
+ttk.Radiobutton(input_frame, text="Да", variable=precip_var, value="Да").grid(row=2, column=1, sticky="w")
+ttk.Radiobutton(input_frame, text="Нет", variable=precip_var, value="Нет").grid(row=2, column=2, sticky="w")
 
-ttk.Button(btn_frame, text="Сгенерировать", command=generate_password).pack(side="left", padx=5)
-password_entry = ttk.Entry(btn_frame, width=45)
-password_entry.pack(side="left", padx=5)
-ttk.Button(btn_frame, text="Копировать", command=copy_to_clipboard).pack(side="left", padx=5)
+ttk.Button(input_frame, text="Добавить запись", command=add_record).grid(row=2, column=3, padx=5, pady=5)
 
-# Таблица истории
-history_frame = ttk.LabelFrame(root, text="История (сохраняется в history.json)")
-history_frame.grid(row=3, column=0, columnspan=3, padx=10, pady=(0, 10), sticky="nsew")
 
-columns = ("id", "password")
-tree = ttk.Treeview(history_frame, columns=columns, show="headings")
-tree.heading("id", text="№")
-tree.heading("password", text="Пароль")
-tree.column("id", width=40)
-tree.column("password", width=480)
+# --- Рамка для фильтрации ---
+filter_frame = ttk.LabelFrame(root, text="Фильтр записей")
+filter_frame.pack(padx=10, pady=(0, 10), fill="x")
+
+ttk.Label(filter_frame, text="Дата:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+filter_date_entry = ttk.Entry(filter_frame, width=15)
+filter_date_entry.grid(row=0, column=1, padx=5, pady=5)
+
+ttk.Label(filter_frame, text="Темп. выше:").grid(row=0, column=2, padx=5, pady=5, sticky="e")
+filter_temp_entry = ttk.Entry(filter_frame, width=10)
+filter_temp_entry.grid(row=0, column=3, padx=5, pady=5)
+
+ttk.Button(filter_frame, text="Применить фильтр", command=filter_records).grid(row=0, column=4, padx=5, pady=5)
+ttk.Button(filter_frame, text="Сбросить фильтр", command=lambda: [filter_date_entry.delete(0,'end'), filter_temp_entry.delete(0,'end'), update_treeview()]).grid(row=0, column=5, padx=5, pady=5)
+
+
+# --- Таблица для отображения записей ---
+tree_frame = ttk.Frame(root)
+tree_frame.pack(padx=10, pady=10, fill="both", expand=True)
+
+columns = ("date", "temperature", "description", "precipitation")
+tree = ttk.Treeview(tree_frame, columns=columns, show="headings")
+tree.heading("date", text="Дата")
+tree.heading("temperature", text="Температура °C")
+tree.heading("description", text="Описание")
+tree.heading("precipitation", text="Осадки")
+tree.column("date", width=120)
+tree.column("temperature", width=100)
+tree.column("description", width=350)
+tree.column("precipitation", width=80)
 tree.pack(fill="both", expand=True)
 
-# Обновляем таблицу при запуске приложения
-update_history_table()
+# Заполняем таблицу при запуске
+update_treeview()
 
-# Запуск приложения
 root.mainloop()
