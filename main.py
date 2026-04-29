@@ -6,7 +6,7 @@ import json
 import os
 
 # --- Настройки ---
-HISTORY_FILE = "history.json
+HISTORY_FILE = "history.json"
 MIN_LENGTH = 4
 MAX_LENGTH = 32
 
